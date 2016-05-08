@@ -5,10 +5,11 @@
 
 describe("Job.Catalog.GenerateTag", function () {
     var waterline = {};
-    var taskProtocol = {};
     var GenerateTag;
     var uuid;
-
+    var messenger;
+    var testMessage;
+    var testSubscription;
     var catalog1 = {
         id: 'abf9d5a4ebf61b6715dbaef6',
         source: 'dmi',
@@ -41,8 +42,7 @@ describe("Job.Catalog.GenerateTag", function () {
             helper.require('/lib/jobs/base-job.js'),
             helper.require('/lib/jobs/generate-tag.js'),
             helper.require('/lib/utils/job-utils/catalog-searcher.js'),
-            helper.di.simpleWrapper(waterline, 'Services.Waterline'),
-            helper.di.simpleWrapper(taskProtocol, 'Protocol.Task'),
+            helper.di.simpleWrapper(waterline, 'Services.Waterline')
         ]);
 
         GenerateTag = helper.injector.get('Job.Catalog.GenerateTag');
@@ -56,15 +56,30 @@ describe("Job.Catalog.GenerateTag", function () {
         waterline.nodes = {
             addTags: sinon.stub().resolves()
         };
+        messenger = helper.injector.get('Services.Messenger');
+        var Message = helper.injector.get('Message');
+        testMessage = new Message({},{},{routingKey:'test.route.key'});
+        sinon.stub(testMessage);
+                
+        var Subscription = helper.injector.get('Subscription');
+        testSubscription = new Subscription({},{});
+        sinon.stub(testSubscription);
     });
 
     beforeEach(function () {
         waterline.tags.find.reset();
         waterline.catalogs.findMostRecent.reset();
         waterline.nodes.addTags.reset();
-        taskProtocol.subscribeActiveTaskExists = sinon.stub().resolves({
-            dispose: sinon.stub()
+        sinon.stub(messenger, 'subscribe', function(name,id,callback) {
+            callback({value:'test'}, testMessage);
+            return Promise.resolve(testSubscription);
         });
+        sinon.stub(messenger, 'publish').resolves();
+    });
+
+    afterEach(function() {
+        messenger.publish.restore();
+        messenger.subscribe.restore();
     });
 
     it('assigns a matching tag', function() {

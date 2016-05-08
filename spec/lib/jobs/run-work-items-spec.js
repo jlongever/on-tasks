@@ -5,26 +5,24 @@
 
 describe("Job.Catalog.RunWorkItem", function () {
     var waterline = {};
-    var taskProtocol = {};
     var RunWorkItems;
     var uuid;
-
+    var messenger;
+    var testMessage;
+    var testSubscription;
+    
     before(function () {
         // create a child injector with on-core and the base pieces we need to test this
         helper.setupInjector([
             helper.require('/spec/mocks/logger.js'),
             helper.require('/lib/jobs/base-job.js'),
             helper.require('/lib/jobs/run-work-items.js'),
-            helper.di.simpleWrapper(waterline, 'Services.Waterline'),
-            helper.di.simpleWrapper(taskProtocol, 'Protocol.Task')
+            helper.di.simpleWrapper(waterline, 'Services.Waterline')
         ]);
 
         RunWorkItems = helper.injector.get('Job.WorkItems.Run');
         uuid = helper.injector.get('uuid');
-        
-        taskProtocol.publishRunIpmiCommand = sinon.stub().resolves();
-        taskProtocol.publishRunSnmpCommand = sinon.stub().resolves();
-        
+
         waterline.workitems = {
             startNextScheduled: sinon.stub().resolves(),
             setSucceeded: sinon.stub(),
@@ -34,6 +32,15 @@ describe("Job.Catalog.RunWorkItem", function () {
         waterline.nodes = {
             findOne: sinon.stub()
         };
+        
+        messenger = helper.injector.get('Services.Messenger');
+        var Message = helper.injector.get('Message');
+        testMessage = new Message({},{},{routingKey:'test.route.key'});
+        sinon.stub(testMessage);
+                
+        var Subscription = helper.injector.get('Subscription');
+        testSubscription = new Subscription({},{});
+        sinon.stub(testSubscription);
     });
 
     beforeEach(function () {
@@ -41,8 +48,16 @@ describe("Job.Catalog.RunWorkItem", function () {
         waterline.workitems.setSucceeded.reset();
         waterline.workitems.setFailed.reset();
         waterline.nodes.findOne.reset();
-        taskProtocol.publishRunIpmiCommand.reset();
-        taskProtocol.publishRunSnmpCommand.reset();
+        sinon.stub(messenger, 'subscribe', function(name,id,callback) {
+            callback({value:'test'}, testMessage);
+            return Promise.resolve(testSubscription);
+        });
+        sinon.stub(messenger, 'publish').resolves();
+    });
+    
+    afterEach(function() {
+        messenger.publish.restore();
+        messenger.subscribe.restore();
     });
 
     it('should run an IPMI Poller work item', function(done) {
@@ -58,21 +73,21 @@ describe("Job.Catalog.RunWorkItem", function () {
         };
 
         var job = new RunWorkItems({}, { graphId: uuid.v4() }, uuid.v4());
-
         waterline.workitems.startNextScheduled.onCall(0).resolves(workItem);
+        job._publishRunIpmiCommand = sinon.stub().resolves();
         job.run();
 
         // This is guaranteed to run because job._deferred won't resolve until
         // we call job.cancel()
         setImmediate(function () {
             try {
-                expect(taskProtocol.publishRunIpmiCommand).to.have.been.calledOnce;
-                expect(taskProtocol.publishRunIpmiCommand.firstCall.args[1]).to.equal('sel');
-                expect(taskProtocol.publishRunIpmiCommand.firstCall.args[2])
+                expect(job._publishRunIpmiCommand).to.have.been.calledOnce;
+                expect(job._publishRunIpmiCommand.firstCall.args[1]).to.equal('sel');
+                expect(job._publishRunIpmiCommand.firstCall.args[2])
                     .to.have.property('ip', '1.2.3.4');
-                expect(taskProtocol.publishRunIpmiCommand.firstCall.args[2])
+                expect(job._publishRunIpmiCommand.firstCall.args[2])
                     .to.have.property('user', 'myuser');
-                expect(taskProtocol.publishRunIpmiCommand.firstCall.args[2])
+                expect(job._publishRunIpmiCommand.firstCall.args[2])
                     .to.have.property('password', 'mypass');
 
                 job.cancel();
@@ -109,9 +124,9 @@ describe("Job.Catalog.RunWorkItem", function () {
         };
 
         var job = new RunWorkItems({}, { graphId: uuid.v4() }, uuid.v4());
-
         waterline.workitems.startNextScheduled.onCall(0).resolves(workItem);
         waterline.nodes.findOne.resolves(node);
+        job._publishRunIpmiCommand = sinon.stub().resolves();
         job.run();
 
         // This is guaranteed to run because job._deferred won't resolve until
@@ -121,15 +136,15 @@ describe("Job.Catalog.RunWorkItem", function () {
                 expect(waterline.nodes.findOne).to.have.been.calledOnce;
                 expect(waterline.nodes.findOne).to.have.been.calledWith(node.id);
 
-                expect(taskProtocol.publishRunIpmiCommand).to.have.been.calledOnce;
-                expect(taskProtocol.publishRunIpmiCommand.firstCall.args[1]).to.equal('power');
-                expect(taskProtocol.publishRunIpmiCommand.firstCall.args[2])
+                expect(job._publishRunIpmiCommand).to.have.been.calledOnce;
+                expect(job._publishRunIpmiCommand.firstCall.args[1]).to.equal('power');
+                expect(job._publishRunIpmiCommand.firstCall.args[2])
                     .to.have.property('ip', '1.2.3.4');
-                expect(taskProtocol.publishRunIpmiCommand.firstCall.args[2])
+                expect(job._publishRunIpmiCommand.firstCall.args[2])
                     .to.have.property('user', 'myuser');
-                expect(taskProtocol.publishRunIpmiCommand.firstCall.args[2])
+                expect(job._publishRunIpmiCommand.firstCall.args[2])
                     .to.have.property('password', 'mypass');
-                expect(taskProtocol.publishRunIpmiCommand.firstCall.args[2])
+                expect(job._publishRunIpmiCommand.firstCall.args[2])
                     .to.have.property('node', node.id);
 
                 job.cancel();
@@ -151,19 +166,17 @@ describe("Job.Catalog.RunWorkItem", function () {
         };
 
         var job = new RunWorkItems({}, { graphId: uuid.v4() }, uuid.v4());
-
         waterline.workitems.startNextScheduled.onCall(0).resolves(workItem);
-
+        job._publishRunSnmpCommand = sinon.stub().resolves();
         job.run();
-
+        
         setImmediate(function () {
             try {
-                expect(taskProtocol.publishRunSnmpCommand).to.have.been.calledOnce;
-                expect(taskProtocol.publishRunSnmpCommand.firstCall.args[1].config)
+                expect(job._publishRunSnmpCommand).to.have.been.calledOnce;
+                expect(job._publishRunSnmpCommand.firstCall.args[1].config)
                     .to.have.property('ip', '1.2.3.4');
-                expect(taskProtocol.publishRunSnmpCommand.firstCall.args[1].config)
+                expect(job._publishRunSnmpCommand.firstCall.args[1].config)
                     .to.have.property('communityString', 'hello');
-
                 job.cancel();
                 done();
             } catch (e) {

@@ -9,9 +9,10 @@ var uuid = require('node-uuid'),
 describe("Base Job", function () {
     var BaseJob;
     var MockJob;
-    var taskProtocol;
     var eventsProtocol;
     var messenger;
+    var testMessage;
+    var testSubscription;
 
     before('Base Job before', function () {
         // create a child injector with on-core and the base pieces we need to test this
@@ -21,25 +22,20 @@ describe("Base Job", function () {
 
         messenger = helper.injector.get('Services.Messenger');
         BaseJob = helper.injector.get('Job.Base');
+        
+        var Message = helper.injector.get('Message');
+        testMessage = new Message({},{},{routingKey:'test.route.key'});
+        sinon.stub(testMessage);
+                
+        var Subscription = helper.injector.get('Subscription');
+        testSubscription = new Subscription({},{});
+        sinon.stub(testSubscription);
 
-        taskProtocol = helper.injector.get('Protocol.Task');
         eventsProtocol = helper.injector.get('Protocol.Events');
 
         var Logger = helper.injector.get('Logger');
         sinon.stub(Logger.prototype, 'log');
 
-        _.forEach(Object.getPrototypeOf(taskProtocol), function(f, funcName) {
-            var spy = sinon.spy(function() {
-                return new Promise(function (resolve) {
-                    process.nextTick(function() {
-                        resolve(spy);
-                    });
-                });
-            });
-            spy.dispose = sinon.stub();
-            spy.dispose = sinon.stub();
-            taskProtocol[funcName] = spy;
-        });
         _.forEach(Object.getPrototypeOf(eventsProtocol), function(f, funcName) {
             var spy = sinon.spy(function() {
                 return new Promise(function (resolve) {
@@ -72,14 +68,21 @@ describe("Base Job", function () {
     });
 
     beforeEach('Base Job beforeEach', function() {
-        _.forEach(Object.getPrototypeOf(taskProtocol), function(f, funcName) {
-            taskProtocol[funcName].dispose.reset();
-        });
         _.forEach(Object.getPrototypeOf(eventsProtocol), function(f, funcName) {
             eventsProtocol[funcName].dispose.reset();
         });
+        sinon.stub(messenger, 'subscribe', function(name,id,callback) {
+            callback({value:'test'}, testMessage);
+            return Promise.resolve(testSubscription);
+        });
+        sinon.stub(messenger, 'publish').resolves();
     });
-
+    
+    afterEach(function() {
+        messenger.publish.restore();
+        messenger.subscribe.restore();
+    });
+    
     describe('Subclassed methods', function() {
         var job;
 
@@ -132,13 +135,8 @@ describe("Base Job", function () {
         });
         
         beforeEach('Base Job Publish beforeEach', function() {
-            sinon.stub(messenger, 'publish').resolves();
             MockJob.prototype._run.reset();
             job = new MockJob();
-        });
-        
-        afterEach('Base Job Publish afterEach', function() {
-            messenger.publish.restore();
         });
         
         after('Base Job Publish after', function() {
@@ -168,12 +166,6 @@ describe("Base Job", function () {
         });
 
         beforeEach('Base Job Subscriptions beforeEach', function() {
-            sinon.stub(messenger, 'subscribe', function(name,id,callback) {
-                callback({value:'test'});
-                return Promise.resolve({
-                    dispose: sinon.stub().resolves()
-                });
-            });
             MockJob.prototype._run.reset();
             job = new MockJob();
         });
@@ -182,10 +174,6 @@ describe("Base Job", function () {
             MockJob.prototype._run.restore();
         });
         
-        afterEach('Base Job Subscription afterEach', function() {
-            messenger.subscribe.restore();
-        });
-
         it("should respond to activeTaskExists requests", function() {
             job._subscribeActiveTaskExists = sinon.stub().resolves();
 
@@ -198,14 +186,6 @@ describe("Base Job", function () {
             });
         });
 
-        it('should have a subscription to activeTaskExists if there is a target', function() {
-            return job.run()
-            .then(function() {
-                expect(job.subscriptions).to.be.an('array').with.length(1);
-                expect(job.subscriptions[0].toString()).to.equal('subscribeActiveTaskExists');
-            });
-        });
-        
         it("should clean up subscriptions for every subscriber helper method", function() {
             var numSubscriberMethods = 0;
             // Call every AMQP subscriber helper method
@@ -213,7 +193,6 @@ describe("Base Job", function () {
                 // _subscribeActiveTaskExists should be added internally
                 if (funcName.indexOf('_subscribe') === 0 &&
                     funcName !== '_subscribeActiveTaskExists') {
-
                     var stub = sinon.stub();
                     stub.call = sinon.stub();
                     // Call all subscriber methods with appropriate arity, and
@@ -223,22 +202,16 @@ describe("Base Job", function () {
                     numSubscriberMethods += 1;
                 }
             });
-
+            
             expect(job.subscriptionPromises).to.have.length(numSubscriberMethods);
             expect(job.subscriptions).to.have.length(0);
-
+            testSubscription.dispose.reset();
+            
             return job.run()
             .then(function() {
                 // account for subscribeActiveTaskExists
                 expect(job.subscriptions).to.have.length(numSubscriberMethods + 1);
-
-                _.forEach(job.subscriptions, function(subscription) {
-                    if (subscription.toString() === 'subscribeTrigger') {
-                        expect(subscription.dispose).to.have.been.calledTwice;
-                    } else {
-                        expect(subscription.dispose).to.have.been.calledOnce;
-                    }
-                });
+                expect(testSubscription.dispose.callCount).to.equal(numSubscriberMethods);
             });
         });
         

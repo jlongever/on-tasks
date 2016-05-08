@@ -5,25 +5,35 @@
 
 describe("Job.Pollers.CreateDefault", function () {
     var waterline = {};
-    var taskProtocol = {};
     var CreateDefaultPollers;
     var pollers;
     var Promise;
     var uuid;
-
+    var messenger;
+    var testMessage;
+    var testSubscription;
+    
     before(function () {
         // create a child injector with on-core and the base pieces we need to test this
         helper.setupInjector([
             helper.require('/spec/mocks/logger.js'),
             helper.require('/lib/jobs/base-job.js'),
             helper.require('/lib/jobs/create-default-pollers.js'),
-            helper.di.simpleWrapper(waterline, 'Services.Waterline'),
-            helper.di.simpleWrapper(taskProtocol, 'Protocol.Task')
+            helper.di.simpleWrapper(waterline, 'Services.Waterline')
         ]);
 
         CreateDefaultPollers = helper.injector.get('Job.Pollers.CreateDefault');
         Promise = helper.injector.get('Promise');
         uuid = helper.injector.get('uuid');
+        
+        messenger = helper.injector.get('Services.Messenger');
+        var Message = helper.injector.get('Message');
+        testMessage = new Message({},{},{routingKey:'test.route.key'});
+        sinon.stub(testMessage);
+                
+        var Subscription = helper.injector.get('Subscription');
+        testSubscription = new Subscription({},{});
+        sinon.stub(testSubscription);
     });
 
     beforeEach(function () {
@@ -43,9 +53,6 @@ describe("Job.Pollers.CreateDefault", function () {
                 id: 'bc7dab7e8fb7d6abf8e7d6a1'
             })
         };
-        taskProtocol.subscribeActiveTaskExists = sinon.stub().returns(Promise.resolve({
-            dispose: sinon.stub()
-        }));
         pollers = [
             {
                 "type": "ipmi",
@@ -55,8 +62,18 @@ describe("Job.Pollers.CreateDefault", function () {
                 }
             }
         ];
+        sinon.stub(messenger, 'subscribe', function(name,id,callback) {
+            callback({value:'test'}, testMessage);
+            return Promise.resolve(testSubscription);
+        });
+        sinon.stub(messenger, 'publish').resolves();
     });
-
+    
+    afterEach(function() {
+        messenger.publish.restore();
+        messenger.subscribe.restore();
+    });
+    
     it('should create pollers for a job with options.nodeId', function () {
         var nodeId = 'bc7dab7e8fb7d6abf8e7d6ad';
 
